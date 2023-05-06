@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <string.h>
+#include <errno.h>
 
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
@@ -24,27 +25,26 @@ int main(void)
     int segment, *shm_start_time, *shm_duration_time;
 
     // criando segmento de memoria compartilhada
-    segment = shmget(14000, SHM_SIZE, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    segment = shmget(48000, SHM_SIZE, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
     if (segment == -1)
     {
         printf("erro no shmget\n");
         exit(1);
     }
 
-    // dando attach das variaveis na memoria compartilhada
-    shm_program_name = (char *)shmat(segment, NULL, 0);
+    shm_program_name = (char *)shmat(segment, 0, 0); /* attach no endereco inicial */
     if (shm_program_name == (void *)-1)
     {
         printf("erro no shmat\n");
         exit(1);
     }
-    shm_start_time = (int *)shm_program_name + 1; /* posicao seguinte de program_name */
+    shm_start_time = (int *)((char *)shmat(segment, 0, 0) + (char)MAX_PROGRAM_NAME_LEN); /* attach no endereco com o offset de program name */
     if (shm_start_time == (void *)-1)
     {
         printf("erro no shmat\n");
         exit(1);
     }
-    shm_duration_time = (int *)shm_start_time + 1; /* posicao seguinte de start time*/
+    shm_duration_time = (int *)((char *)shmat(segment, 0, 0) + (char)MAX_PROGRAM_NAME_LEN + sizeof(int)); /* attach no endereco com offset de program name + start time */
     if (shm_duration_time == (void *)-1)
     {
         printf("erro no shmat\n");
@@ -63,21 +63,20 @@ int main(void)
             {
                 if (fscanf(file_ptr, " I=%d D=%d", &start_time, &duration_time) == 2)
                 {
-                    printf("escalonameno robinho\n");
-                    printf("%s %d %d\n", program_name, start_time, duration_time);
+                    printf("escalonamento robinho\n");
 
-                    // passando valores encontrados no arquivo para variaveis da memoria comparilhada
                     strcpy(shm_program_name, program_name);
                     *shm_start_time = start_time;
                     *shm_duration_time = duration_time;
+
+                    printf("program name, start time e duration time na memoria ja: %s %d %d\n", shm_program_name, *shm_start_time, *shm_duration_time);
                 }
                 else
                 {
                     printf("escalonamento real time\n");
-                    printf("%s\n", program_name);
 
-                    // passando nome encontrado no arquivo pra variavel na memoria compartilhada
                     strcpy(shm_program_name, program_name);
+                    printf("program name na memoria ja: %s\n", shm_program_name);
                 }
             }
             else
@@ -90,23 +89,13 @@ int main(void)
     }
     fclose(file_ptr);
 
-    // dettach de variaveis da memoria compartilhada
     if (shmdt(shm_program_name) == -1)
     {
         printf("erro no shmdt program name\n");
         exit(3);
     }
-    if (shmdt(shm_start_time) == -1)
-    {
-        printf("erro no shmdt start time\n");
-        exit(3);
-    }
-    if (shmdt(shm_duration_time) == -1)
-    {
-        printf("erro no shmdt duration time\n");
-        exit(3);
-    }
 
+    // liberando segmento de memoria
     if (shmctl(segment, IPC_RMID, 0) == -1)
     {
         printf("erro no shmctl\n");
