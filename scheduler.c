@@ -5,25 +5,27 @@
 #include <sys/shm.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <signal.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <semaphore.h>
+#include <fcntl.h>
 
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
 
-// void sigusr1_handler(int signum, int *x);
-// void sigusr2_handler(int signum, int *x);
-
 int main(int argc, char *argv[])
 {
-    int segment, *shm_start_time, *shm_duration_time, interpreter_pid;
+    // variaveis memoria compartilhada
+    int segment, *shm_start_time, *shm_duration_time;
     char *shm_program_name;
-    // *x = 0;
 
-    // signal(SIGUSR1, sigusr1_handler);
-    // signal(SIGUSR2, sigusr2_handler);
+    // variaveis semafoto
+    sem_t *semid;
 
-    segment = shmget(2000, SHM_SIZE, S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    // conectando na memoria compartilhada ja criada
+    segment = shmget(2000, SHM_SIZE, 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -50,27 +52,24 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    if (argc > 1 && atoi(argv[1]) == 1)
-    {
-        interpreter_pid = atoi(argv[2]);
-        kill(interpreter_pid, SIGCONT);
+    // conectando no semaforo ja criado (mode e value serão ignorados já que interpreter.c já criou o semaforo antes e definiu eles)
+    semid = sem_open("/smphr" /* semaphore name since it is identified by the name */, O_CREAT /* creation flags */, 0666 /* permissions */, 1 /* initial semaphore value */);
+
+    sem_wait(semid);
+
+    if (*shm_start_time == -1 && *shm_duration_time == -1)
+    { /* round robin */
+        printf("*ROUND ROBIN*\n");
+        printf("program name: %s\n", shm_program_name);
+    }
+    else
+    { /* real time */
+        printf("*REAL TIME*\n");
+        printf("program name: %s\n", shm_program_name);
+        printf("start time: %d\n", *shm_start_time);
+        printf("duration time: %d\n", *shm_duration_time);
     }
 
-    printf("continuei\n");
-    // if (*x == 1)
-    // {
-    //     printf("SCHEDULER REAL TIME\n");
-    //     // real time
-    // }
-    // else
-    // {
-    //     printf("SCHEDULER ROUND ROBIN\n");
-    //     // round robin
-    // }
-
-    // printf("program name: %s\n", shm_program_name);
-    // printf("start time: %d\n", *shm_start_time);
-    // printf("duration time: %d\n", *shm_duration_time);
     if (shmdt(shm_program_name) == -1)
     {
         printf("erro no shmdt() program name\n");
@@ -87,6 +86,3 @@ int main(int argc, char *argv[])
 
     return 0;
 }
-
-// void sigusr1_handler(int signum, int *x) /* real time*/ { *x = 1; }
-// void sigusr2_handler(int signum, int *x) /* round robin*/ { *x = 2; }
