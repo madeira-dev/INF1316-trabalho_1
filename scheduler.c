@@ -11,16 +11,17 @@
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
 
+// void sigusr1_handler(int signum, int *x);
+// void sigusr2_handler(int signum, int *x);
+
 int main(int argc, char *argv[])
 {
-    if (argc > 1 && atoi(argv[1]) == 1)
-    {
-        printf("to no scheduler e o pid eh: %d\n", getpid());
-        return 0;
-    }
-
-    int segment, *shm_start_time, *shm_duration_time;
+    int segment, *shm_start_time, *shm_duration_time, interpreter_pid;
     char *shm_program_name;
+    // *x = 0;
+
+    // signal(SIGUSR1, sigusr1_handler);
+    // signal(SIGUSR2, sigusr2_handler);
 
     segment = shmget(2000, SHM_SIZE, S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
     if (segment == -1)
@@ -49,7 +50,24 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    printf("codigo completo scheduler\n");
+    if (argc > 1 && atoi(argv[1]) == 1)
+    {
+        interpreter_pid = atoi(argv[2]);
+        kill(interpreter_pid, SIGCONT);
+    }
+
+    printf("continuei\n");
+    // if (*x == 1)
+    // {
+    //     printf("SCHEDULER REAL TIME\n");
+    //     // real time
+    // }
+    // else
+    // {
+    //     printf("SCHEDULER ROUND ROBIN\n");
+    //     // round robin
+    // }
+
     // printf("program name: %s\n", shm_program_name);
     // printf("start time: %d\n", *shm_start_time);
     // printf("duration time: %d\n", *shm_duration_time);
@@ -69,3 +87,6 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+
+// void sigusr1_handler(int signum, int *x) /* real time*/ { *x = 1; }
+// void sigusr2_handler(int signum, int *x) /* round robin*/ { *x = 2; }

@@ -13,12 +13,12 @@
 
 int main(void)
 {
-    // variaveis file I/O
     FILE *file_ptr;
-    char program_name[MAX_PROGRAM_NAME_LEN], exec_mode[] = "1";
-    int start_time, duration_time; /* escalonamento robinho */
+    char program_name[MAX_PROGRAM_NAME_LEN], exec_mode[] = "1", interpreter_pid[8];
+    int start_time, duration_time; /* escalonamento round robin */
     int c, scheduler_pid, pid, status;
-    char *args[] = {"scheduler", exec_mode, NULL};
+    sprintf(interpreter_pid, "%d", getpid()); // passando pra string pra enviar pro scheduler por arg
+    char *args[] = {"scheduler", exec_mode, interpreter_pid, NULL};
 
     // variaveis memoria compartilhada
     char *shm_program_name;
@@ -60,8 +60,6 @@ int main(void)
     }
     if (pid == 0)
     {
-        printf("entrei no processo filho\n");
-        // processo filho
         execv("scheduler", args);
 
         // atualizando valor do exec_mode pra não entrar mais no if inicial do scheduler
@@ -70,12 +68,12 @@ int main(void)
     }
     else
     {
-        // processo pai
         scheduler_pid = pid;
-        printf("DEUBG: scheduler pid: %d\n", scheduler_pid);
 
         // esperando scheduler acabar
         wait(&status);
+        printf("voltei pro interpreter\n");
+        kill(scheduler_pid, SIGCONT);
 
         // abrindo em read mode
         file_ptr = fopen("exec.txt", "r");
@@ -89,7 +87,6 @@ int main(void)
                 {
                     if (fscanf(file_ptr, " I=%d D=%d", &start_time, &duration_time) == 2)
                     {
-                        printf("escalonamento robinho\n");
 
                         strcpy(shm_program_name, program_name);
                         *shm_start_time = start_time;
@@ -98,14 +95,12 @@ int main(void)
                         // printf("program name, start time e duration time na memoria ja: %s %d %d\n", shm_program_name, *shm_start_time, *shm_duration_time);
 
                         // avisa(?) pro escalonador pegar variaveis na memoria
-                        // mandar USRSIG1 (esse avisa que é robinho)
+                        // mandar USRSIG1 (esse avisa que é round robin)
                     }
                     else
                     {
-                        printf("escalonamento real time\n");
 
                         strcpy(shm_program_name, program_name);
-                        // printf("program name na memoria ja: %s\n", shm_program_name);
 
                         // avisa(?) pro escalonador pegar variavel na memoria
                         // mandar SIGUSR2 (esse avisa q é real time)
@@ -125,15 +120,3 @@ int main(void)
     }
     return 0;
 }
-
-/*------------------------------------------------------------*/
-/*
-    # ideia de como pegar pid do scheduler pra enviar sinais #
-
-    Criar processo filho para chamar o scheduler através do execv() por exemplo, acho q esse tipo de exec ja basta
-    e então, o valor do fork() usado pra criar o processo filho vai passar a ser o pid do scheduler pra poder enviar
-    sinais pra ele depois.
-    Explicacao importante execv(): acho que o segundo argumento do execv() pode ser util pra evitar que o
-    scheduler não seja executado nessa primeira chamada pra pegar o pid dele
-*/
-/*------------------------------------------------------------*/

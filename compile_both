@@ -1,0 +1,3 @@
+#!/bin/bash
+gcc -Wall -o interpreter interpreter.c
+gcc -Wall -o scheduler scheduler.c
