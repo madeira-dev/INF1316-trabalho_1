@@ -21,7 +21,7 @@ int main(int argc, char *argv[])
     int segment, *shm_start_time, *shm_duration_time;
     char *shm_program_name;
 
-    // variaveis semafoto
+    // variaveis semaforo
     sem_t *semid;
 
     // conectando na memoria compartilhada ja criada
@@ -53,22 +53,41 @@ int main(int argc, char *argv[])
     }
 
     // conectando no semaforo ja criado (mode e value serão ignorados já que interpreter.c já criou o semaforo antes e definiu eles)
-    semid = sem_open("/smphr" /* semaphore name since it is identified by the name */, O_CREAT /* creation flags */, 0666 /* permissions */, 1 /* initial semaphore value */);
+    semid = sem_open("/smphr3" /* semaphore name since it is identified by the name */, O_CREAT /* creation flags */, 0666 /* permissions */, 1 /* initial semaphore value */);
 
-    sem_wait(semid);
+    while (1)
+    {
+        printf("SCHEDULER\n");
+        if (sem_wait(semid) == -1)
+        {
+            printf("sem_wait error\n");
+            exit(1);
+        }
 
-    if (*shm_start_time == -1 && *shm_duration_time == -1)
-    { /* round robin */
-        printf("*ROUND ROBIN*\n");
-        printf("program name: %s\n", shm_program_name);
+        if (strcmp(shm_program_name, "") != 0)
+        {
+            if (*shm_start_time == -1 && *shm_duration_time == -1)
+            { /* round robin */
+                printf("*ROUND ROBIN*\n");
+                printf("program name: %s\n", shm_program_name);
+            }
+            else
+            { /* real time */
+                printf("*REAL TIME*\n");
+                printf("program name: %s\n", shm_program_name);
+                printf("start time: %d\n", *shm_start_time);
+                printf("duration time: %d\n", *shm_duration_time);
+            }
+
+            // resets shared memory variables variables
+            strcpy(shm_program_name, "");
+            *shm_start_time = -1;
+            *shm_duration_time = -1;
+            sem_post(semid);
+        }
     }
-    else
-    { /* real time */
-        printf("*REAL TIME*\n");
-        printf("program name: %s\n", shm_program_name);
-        printf("start time: %d\n", *shm_start_time);
-        printf("duration time: %d\n", *shm_duration_time);
-    }
+
+    sem_close(semid);
 
     if (shmdt(shm_program_name) == -1)
     {
