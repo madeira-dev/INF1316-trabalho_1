@@ -9,6 +9,27 @@
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
 
+typedef struct _queue_node
+{
+    char program_name[MAX_PROGRAM_NAME_LEN];
+    int start_time;
+    int duration_time;
+    struct _queue_node *next;
+} queue_node;
+
+typedef struct _queue
+{
+    struct _queue_node *front;
+    struct _queue_node *rear;
+} queue;
+
+void init_queue(queue *q);
+int is_queue_empty(queue *q);
+void enqueue(queue *q, const char *program_name, int start_time, int duration_time);
+void dequeue(queue *q);
+void print_queue(queue *q);
+void free_queue(queue_node *q);
+
 int main(void)
 {
     // variaveis file I/O
@@ -128,6 +149,15 @@ int main(void)
                 }
                 else
                 { /* real time */
+                    // verificar se a soma do tempo de inicio com o tempo de duracao eh maior que 60 segundos
+                    // verificar se tempo de inicio e de duracao eh conflitante com algum tempo de inicio e duracao de processo existente
+
+                    if (*shm_start_time + *shm_duration_time > 60)
+                    {
+                        printf("tempo total maior que 60 segundos\n");
+                        exit(1); /* algum jeito correto de tratar sem ser saindo do programa? */
+                    }
+
                     printf("*REAL TIME*\n");
                     printf("program name: %s\n", shm_program_name);
                     printf("start time: %d\n", *shm_start_time);
@@ -158,4 +188,76 @@ int main(void)
     wait(&status); // aguardando processo filho terminar
 
     return 0;
+}
+
+void init_queue(queue *q) { q->front = NULL, q->rear = NULL; }
+
+int is_queue_empty(queue *q) { return (q->front == NULL); }
+
+void enqueue(queue *q, const char *program_name, int start_time, int duration_time)
+{
+    queue_node *new_node = (queue_node *)malloc(sizeof(queue_node));
+    strcpy(new_node->program_name, program_name);
+    new_node->start_time = start_time;
+    new_node->duration_time = duration_time;
+    new_node->next = NULL;
+
+    if (is_queue_empty(q))
+    {
+        q->front = new_node;
+        q->rear = new_node;
+    }
+    else
+    {
+        q->rear->next = new_node;
+        q->rear = new_node;
+    }
+}
+void dequeue(queue *q)
+{
+    // remove front node from the queue
+    queue_node *tmp_node = q->front;
+    char tmp_program_name[20];
+    strcpy(tmp_program_name, tmp_node->program_name);
+    int tmp_start_time = tmp_node->start_time;
+    int tmp_duration_time = tmp_node->duration_time;
+    q->front = q->front->next;
+    free(tmp_node);
+
+    // if queue becomes empty, set rear pointer to NULL
+    if (q->front == NULL)
+        q->rear = NULL;
+}
+
+void print_queue(queue *q)
+{
+    // atualizar funcao com tipo de programa (real time ou round robin) para evitar printar os tempos -1 -1
+    if (is_queue_empty(q))
+        return;
+
+    queue_node *current = q->front;
+    printf("queue: ");
+
+    while (current != NULL)
+    {
+        printf("%s ", current->program_name);
+
+        (current->start_time != -1) ? printf("%d ", current->start_time) : 0;
+        (current->duration_time != -1) ? printf("%d ", current->duration_time) : 0;
+        printf("| ");
+        current = current->next;
+    }
+    printf("\n");
+}
+
+void free_queue(queue_node *q)
+{
+    queue_node *current = q;
+
+    while (current != NULL)
+    {
+        queue_node *next = current->next;
+        free(current);
+        current = next;
+    }
 }
