@@ -9,7 +9,7 @@
 #include <fcntl.h>
 
 #define MAX_PROGRAM_NAME_LEN 20
-#define SHM_SIZE 2048
+#define SHM_SIZE 1024
 
 typedef struct _queue_node
 {
@@ -42,14 +42,13 @@ int main(void)
 
     // variaveis memoria compartilhada
     char *shm_program_name;
-    int segment, *shm_start_time, *shm_duration_time, *interpreter_end, *test;
-    sem_t *access_smphr;
+    int segment, *shm_start_time, *shm_duration_time, *interpreter_end, *shm_access_var;
 
     // variaveis dos processos
     int scheduler_pid, status;
 
     // criando segmento de memoria compartilhada
-    segment = shmget(90000, SHM_SIZE, IPC_CREAT | 0666);
+    segment = shmget(50000, SHM_SIZE, IPC_CREAT | 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -81,19 +80,10 @@ int main(void)
         printf("erro no shmat\n");
         exit(1);
     }
-    access_smphr = (sem_t *)((char *)shmat(segment, 0, 0) + (char)MAX_PROGRAM_NAME_LEN + sizeof(int) + sizeof(int) + sizeof(int));
-    if (access_smphr == (void *)-1)
+    shm_access_var = (int *)((char *)shmat(segment, 0, 0) + (char)MAX_PROGRAM_NAME_LEN + sizeof(int) + sizeof(int) + sizeof(int));
+    if (shm_access_var == (void *)-1)
     {
-        printf("erro no shmat de access_smphr\n");
-        exit(1);
-    }
-    test = (int *)((char *)shmat(segment, 0, 0) + (char)MAX_PROGRAM_NAME_LEN + sizeof(int) + sizeof(int) + sizeof(double) + sizeof(int));
-
-    // initializing semaphore
-    access_smphr = sem_open("/qqqqqqq", O_CREAT, 0666, 1);
-    if (access_smphr == SEM_FAILED)
-    {
-        printf("erro no sem_open\n");
+        printf("erro no shmat de shm_access_var\n");
         exit(1);
     }
 
@@ -109,11 +99,9 @@ int main(void)
 
     if (scheduler_pid != 0) // interpreter (parent)
     {
-        *test = 0;
         // lendo linhas do arquivo
         while ((c = fgetc(file_ptr)) != EOF)
         {
-            sem_wait(access_smphr); // esperando processo filho conceder acesso para a memoria compartilhada
             if (c == 'R')
             {
                 if (fscanf(file_ptr, "un %s", program_name) == 1)
@@ -130,7 +118,7 @@ int main(void)
                         *shm_start_time = start_time = -1;
                         *shm_duration_time = duration_time = -1;
                     }
-                    sem_post(access_smphr); // concedendo acesso para a memoria compartilhada
+                    *shm_access_var = 1;
                 }
 
                 else
@@ -139,51 +127,40 @@ int main(void)
                     exit(1);
                 }
 
-                if (c == EOF)
-                    break;
-
                 // intervalo de 1 segundo entre processos lidos
                 sleep(1);
             }
         }
         fclose(file_ptr);
-        *test = 1; // informa que processo pai acabou de ler todos os programas a escalonar
+        *interpreter_end = 1; // informa que processo pai acabou de ler todos os programas a escalonar
     }
 
     else // scheduler (child)
     {
+        usleep(10);
+
         while (1)
         {
-            sem_wait(access_smphr); // esperando processo pai conceder acesso para a memoria compartilhada
-            if (*test == 1)
+            if (*shm_access_var == 1) // verificando se processo pai concedeu acesso para a memoria compartilhada
             {
-                sem_post(access_smphr); // concedendo acesso para a memoria compartilhada
-                break;
-            }
-
-            if (*shm_start_time == -1 && *shm_duration_time == -1)
-            { /* round robin */
-                printf("*ROUND ROBIN*\n");
-                printf("program name: %s\n", shm_program_name);
-            }
-            else
-            { /* real time */
-                // verificar se a soma do tempo de inicio com o tempo de duracao eh maior que 60 segundos
-                // verificar se tempo de inicio e de duracao eh conflitante com algum tempo de inicio e duracao de processo existente
-
-                if (*shm_start_time + *shm_duration_time > 60)
-                {
-                    printf("tempo total maior que 60 segundos\n");
-                    exit(1); /* algum jeito correto de tratar sem ser saindo do programa? */
+                if (*shm_start_time == -1 && *shm_duration_time == -1)
+                { /* round robin */
+                    printf("*ROUND ROBIN*\n");
+                    printf("program name: %s\n", shm_program_name);
+                }
+                else
+                { /* real time */
+                    printf("*REAL TIME*\n");
+                    printf("program name: %s\n", shm_program_name);
+                    printf("start time: %d\n", *shm_start_time);
+                    printf("duration time: %d\n", *shm_duration_time);
                 }
 
-                printf("*REAL TIME*\n");
-                printf("program name: %s\n", shm_program_name);
-                printf("start time: %d\n", *shm_start_time);
-                printf("duration time: %d\n", *shm_duration_time);
+                // remove acesso para a memoria compartilhada
+                *shm_access_var = 0;
             }
-
-            sem_post(access_smphr); // concedendo acesso para a memoria compartilhada
+            if (*interpreter_end == 1) // verifica se pai terminou de ler todos os programas a serem escalonados
+                break;
         }
 
         if (shmdt(shm_program_name) == -1)
@@ -201,8 +178,6 @@ int main(void)
     }
 
     wait(&status); // aguardando processo filho terminar
-
-    sem_unlink("/qqqqqqq");
 
     return 0;
 }
