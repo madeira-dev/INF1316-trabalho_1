@@ -1,2 +1,5 @@
 Run test1
 Run test2 I=0 D=10
+Run test3 I=20 D=50
+Run test4
+Run test5

@@ -1,17 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
-#include <string.h>
+#include <sys/time.h>
 #include <signal.h>
-#include <semaphore.h>
-#include <fcntl.h>
 
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
 
-typedef struct _queue_node
+typedef struct _queue // fila de prontos
+{
+    struct _queue_node *head;
+    struct _queue_node *tail;
+} queue;
+
+typedef struct _queue_node // processos
 {
     char program_name[MAX_PROGRAM_NAME_LEN];
     int start_time;
@@ -19,16 +24,10 @@ typedef struct _queue_node
     struct _queue_node *next;
 } queue_node;
 
-typedef struct _queue
-{
-    struct _queue_node *front;
-    struct _queue_node *rear;
-} queue;
-
 void init_queue(queue *q);
 int is_queue_empty(queue *q);
 void enqueue(queue *q, const char *program_name, int start_time, int duration_time);
-void dequeue(queue *q);
+queue_node *dequeue(queue *q);
 void print_queue(queue *q);
 void free_queue(queue_node *q);
 
@@ -48,7 +47,7 @@ int main(void)
     int scheduler_pid, status;
 
     // criando segmento de memoria compartilhada
-    segment = shmget(50000, SHM_SIZE, IPC_CREAT | 0666);
+    segment = shmget(1000, SHM_SIZE, IPC_CREAT | 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -137,31 +136,106 @@ int main(void)
 
     else // scheduler (child)
     {
-        usleep(10);
+        queue *processes_queue;
+        int local_start_time, local_duration_time, is_program_executing = 0;
+        char local_program_name[MAX_PROGRAM_NAME_LEN];
+        struct timeval current_time;
 
+        processes_queue = (queue *)malloc(sizeof(queue));
+        init_queue(processes_queue);
+
+        usleep(10); /* garantindo que processo pai comece primeiro */
+
+        // pegando todos os processos e colocando eles na fila de prontos
         while (1)
         {
             if (*shm_access_var == 1) // verificando se processo pai concedeu acesso para a memoria compartilhada
             {
+                // a ideia eh que pra todo processo novo lido ocorra um fork() pra ele pra que seja possivel
+                // enviar sinais
                 if (*shm_start_time == -1 && *shm_duration_time == -1)
                 { /* round robin */
-                    printf("*ROUND ROBIN*\n");
-                    printf("program name: %s\n", shm_program_name);
+                    local_start_time = *shm_start_time;
+                    local_duration_time = *shm_duration_time;
+                    strcpy(local_program_name, shm_program_name);
+
+                    enqueue(processes_queue, local_program_name, local_start_time, local_duration_time);
+                    print_queue(processes_queue);
                 }
                 else
                 { /* real time */
-                    printf("*REAL TIME*\n");
-                    printf("program name: %s\n", shm_program_name);
-                    printf("start time: %d\n", *shm_start_time);
-                    printf("duration time: %d\n", *shm_duration_time);
-                }
+                    if (*shm_start_time + *shm_duration_time > 60)
+                    {
+                        printf("programa %s nao pode ser escalonado.\ntempo total maior que a duracao maxima de 60 segundos\n", shm_program_name);
+                    }
 
+                    else
+                    {
+                        local_start_time = *shm_start_time;
+                        local_duration_time = *shm_duration_time;
+                        strcpy(local_program_name, shm_program_name);
+
+                        enqueue(processes_queue, local_program_name, local_start_time, local_duration_time);
+                        print_queue(processes_queue);
+                    }
+                }
                 // remove acesso para a memoria compartilhada
                 *shm_access_var = 0;
             }
             if (*interpreter_end == 1) // verifica se pai terminou de ler todos os programas a serem escalonados
                 break;
         }
+
+        // apos pegar todos os processos, escalona-los
+        while (1)
+        {
+            if (is_queue_empty(processes_queue))
+            {
+                puts("fila vazia");
+                exit(0);
+            }
+
+            // get first process in queue
+            queue_node *process = dequeue(processes_queue); // pega o primeiro processo na fila
+
+            if (process->start_time != -1 && process->duration_time != -1) // verifica se eh round robin
+            {
+                int start_time, new_process_pid;
+
+                // pegando tempo de inicio de execucao
+                gettimeofday(&current_time, NULL);
+                start_time = current_time.tv_sec;
+
+                // loop para executar processo por 1 segundo
+                while (1)
+                {
+                    new_process_pid = fork();
+                    if (new_process_pid == 0) // filho
+                    {
+                        // filho comeca a executar o programa ate receber sigstop do pai (scheduler)
+                        execl(process->program_name, process->program_name, NULL);
+                    }
+                    else // pai (scheduler)
+                    {
+                        gettimeofday(&current_time, NULL);         // atualizando tempo atual
+                        if (current_time.tv_sec - start_time == 1) // verificando se passou 1 segundo
+                        {
+                            /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
+                            kill(new_process_pid, SIGSTOP);                                                               // sending sigstop to child process
+                            enqueue(processes_queue, process->program_name, process->start_time, process->duration_time); // manda pro final da fila de pronto
+                            break;
+                        }
+                    }
+                }
+            }
+
+            else
+            {
+                // real time
+            }
+        }
+
+        free_queue(processes_queue);
 
         if (shmdt(shm_program_name) == -1)
         {
@@ -182,9 +256,9 @@ int main(void)
     return 0;
 }
 
-void init_queue(queue *q) { q->front = NULL, q->rear = NULL; }
+void init_queue(queue *q) { q->head = NULL, q->tail = NULL; }
 
-int is_queue_empty(queue *q) { return (q->front == NULL); }
+int is_queue_empty(queue *q) { return (q->head == NULL); }
 
 void enqueue(queue *q, const char *program_name, int start_time, int duration_time)
 {
@@ -196,37 +270,36 @@ void enqueue(queue *q, const char *program_name, int start_time, int duration_ti
 
     if (is_queue_empty(q))
     {
-        q->front = new_node;
-        q->rear = new_node;
+        q->head = new_node;
+        q->tail = new_node;
     }
     else
     {
-        q->rear->next = new_node;
-        q->rear = new_node;
+        q->tail->next = new_node;
+        q->tail = new_node;
     }
 }
 
-void dequeue(queue *q)
+queue_node *dequeue(queue *q)
 {
-    // remove front node from the queue
-    queue_node *tmp_node = q->front;
-    char tmp_program_name[20];
-    strcpy(tmp_program_name, tmp_node->program_name);
-    q->front = q->front->next;
-    free(tmp_node);
+    if (is_queue_empty(q))
+        return NULL;
 
-    // if queue becomes empty, set rear pointer to NULL
-    if (q->front == NULL)
-        q->rear = NULL;
+    queue_node *removed_node = q->head;
+    q->head = q->head->next;
+
+    if (q->head == NULL)
+        q->tail = NULL;
+
+    return removed_node;
 }
 
 void print_queue(queue *q)
 {
-    // atualizar funcao com tipo de programa (real time ou round robin) para evitar printar os tempos -1 -1
     if (is_queue_empty(q))
         return;
 
-    queue_node *current = q->front;
+    queue_node *current = q->head;
     printf("queue: ");
 
     while (current != NULL)
