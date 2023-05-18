@@ -1,4 +1,1 @@
-Run test1 I=0 D=4
-Run test2 I=5 D=4
-Run test3 I=10 D=4
-Run test4 I=15 D=5
+Run test1

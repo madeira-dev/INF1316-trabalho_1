@@ -48,7 +48,7 @@ int main(void)
     int scheduler_pid, status;
 
     // criando segmento de memoria compartilhada
-    segment = shmget(12000, SHM_SIZE, IPC_CREAT | 0666);
+    segment = shmget(9000, SHM_SIZE, IPC_CREAT | 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -187,9 +187,11 @@ int main(void)
         }
 
         printf("\n");
-        // // apos pegar todos os processos, escalona-los
+
+        // apos pegar todos os processos, escalona-los
         while (i < 5)
         {
+            printf("inicio while\n");
             if (is_queue_empty(processes_queue))
             {
                 puts("fila vazia\n");
@@ -270,12 +272,14 @@ int main(void)
                 int start_time_rt;
                 gettimeofday(&current_time, NULL);
                 start_time_rt = current_time.tv_sec;
+
                 while (1)
                 {
                     gettimeofday(&current_time, NULL);                              // atualizando a variavel de tempo atual
                     if (start_time_rt + process->start_time == current_time.tv_sec) // testando se atingiu o tempo de inicio
                     {
-                        start_time_rt = current_time.tv_sec;
+                        start_time_rt = current_time.tv_sec; // atualizando tempo de inicio
+
                         if (process->pid == 0) // primeira vez que esta executando
                         {
                             // criando processo filho para executar o programa
@@ -308,12 +312,13 @@ int main(void)
                                 }
                             }
                         }
-                        else // processo que ja foi executado e retornou ao primeiro lugar da fila de prontos
+
+                        else // processo que ja foi executado e retornou ao primeiro lugar da fila de pronto
                         {
                             is_program_executing = 1;
                             printf("SIGCONT agora\n\n");
-                            start_time_rt = current_time.tv_sec;
-                            kill(process->pid, SIGCONT); // faz o processo retornar a execucao
+                            start_time_rt = current_time.tv_sec; // atualizando tempo de inicio
+                            kill(process->pid, SIGCONT);         // faz o processo retornar a execucao
 
                             while (1)
                             {
@@ -330,6 +335,7 @@ int main(void)
                                 }
                             }
                         }
+                        break;
                     }
                 }
                 // sleep pelo tempo que resta ate completar 1 minuto ja que os processos sao periodicos (1 por minuto)
