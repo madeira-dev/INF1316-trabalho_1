@@ -1,3 +1,18 @@
+/* TODO:
+    1 - interpretador verifica as restrições dos tempos dos processos real time - FEITO
+
+    2 - dividir em filas para cada tipo de processo
+
+    3 - verificação contínua do tempo para, caso coincida com tempo de início
+        de um real time, colocar ele direto mesmo que no lugar de um round robin
+
+    4 - tratar casos de i/o bound
+        4.1 - passar pid do pai para o processo que será executado pelos argumentos de chamada
+        4.2 - verificar se o processo pai recebe o sinal do processo sendo executado
+        4.3 - depois que receber o sinal, colocar o processo na fila de espera até acabar o
+              tempo de execução dele (entender melhor como funciona isso do i/o bound)
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -31,6 +46,11 @@ void enqueue(queue *q, const char *program_name, int start_time, int duration_ti
 queue_node *dequeue(queue *q);
 void print_queue(queue *q);
 void free_queue(queue *q);
+int check_conflicting_times(queue *q, int curr_process_start_time, int curr_process_duration_time);
+void sigusr1_handler(int signum);
+
+// variavel global para tratar programas I/O bound
+int is_io = 0;
 
 int main(void)
 {
@@ -47,8 +67,13 @@ int main(void)
     // variaveis dos processos
     int scheduler_pid, status;
 
+    signal(SIGUSR1, sigusr1_handler);
+    queue *temp_queue; // queue temporaria no interpretador para ver se tempos dos processos real time estao conflitando
+    temp_queue = (queue *)malloc(sizeof(queue));
+    init_queue(temp_queue);
+
     // criando segmento de memoria compartilhada
-    segment = shmget(9000, SHM_SIZE, IPC_CREAT | 0666);
+    segment = shmget(32000, SHM_SIZE, IPC_CREAT | 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -107,17 +132,17 @@ int main(void)
                 if (fscanf(file_ptr, "un %s", program_name) == 1)
                 {
                     if (fscanf(file_ptr, " I=%d D=%d", &start_time, &duration_time) == 2)
-                    { /* real time */
-                        if (start_time + duration_time > 60)
-                        {
-                            printf("start time: %d\nduration time: %d", *shm_start_time, *shm_duration_time);
+                    {                                        /* real time */
+                        if (start_time + duration_time > 60) // verifica se tempo total eh maior que limite maximo
                             printf("programa %s nao pode ser escalonado.\ntempo total maior que a duracao maxima de 60 segundos\n", shm_program_name);
-                        }
+                        else if (check_conflicting_times(temp_queue, start_time, duration_time)) // verifica se existe conflito entre tempos dos processos
+                            printf("tempos do processo %s conflitam com os de outro processo.\nNao pode ser escalonado.\n", program_name);
                         else
                         {
                             strcpy(shm_program_name, program_name);
                             *shm_start_time = start_time;
                             *shm_duration_time = duration_time;
+                            enqueue(temp_queue, program_name, start_time, duration_time, 0);
                         }
                     }
 
@@ -142,17 +167,24 @@ int main(void)
         }
         fclose(file_ptr);
         *interpreter_end = 1; // informa que processo pai acabou de ler todos os programas a escalonar
+        free_queue(temp_queue);
     }
 
     else // scheduler (child)
     {
-        queue *processes_queue;
-        int local_start_time, local_duration_time, is_program_executing = 0;
+        queue *processes_queue /* primeira fila */, *waiting_queue /* fila para colocar os i/o até chegar o alarme deles */, *real_time_processes_queue /* fila apenas para processos real time */, *round_robin_processes_queue /* fila apenas para processos round robin */;
+        int local_start_time, local_duration_time;
         char local_program_name[MAX_PROGRAM_NAME_LEN];
         struct timeval current_time;
 
         processes_queue = (queue *)malloc(sizeof(queue));
+        waiting_queue = (queue *)malloc(sizeof(queue));
+        real_time_processes_queue = (queue *)malloc(sizeof(queue));
+        round_robin_processes_queue = (queue *)malloc(sizeof(queue));
         init_queue(processes_queue);
+        init_queue(waiting_queue);
+        init_queue(real_time_processes_queue);
+        init_queue(round_robin_processes_queue);
 
         usleep(10); /* garantindo que processo pai inicia primeiro */
 
@@ -167,8 +199,9 @@ int main(void)
                     local_duration_time = *shm_duration_time;
                     strcpy(local_program_name, shm_program_name);
 
-                    enqueue(processes_queue, local_program_name, local_start_time, local_duration_time, 0);
-                    print_queue(processes_queue);
+                    enqueue(round_robin_processes_queue, local_program_name, local_start_time, local_duration_time, 0);
+                    printf("fila round robin:\n");
+                    print_queue(round_robin_processes_queue);
                 }
                 else
                 { /* real time */
@@ -176,8 +209,9 @@ int main(void)
                     local_duration_time = *shm_duration_time;
                     strcpy(local_program_name, shm_program_name);
 
-                    enqueue(processes_queue, local_program_name, local_start_time, local_duration_time, 0);
-                    print_queue(processes_queue);
+                    enqueue(real_time_processes_queue, local_program_name, local_start_time, local_duration_time, 0);
+                    printf("fila real time:\n");
+                    print_queue(real_time_processes_queue);
                 }
                 // remove acesso para a memoria compartilhada
                 *shm_access_var = 0;
@@ -188,41 +222,40 @@ int main(void)
 
         printf("\n");
 
-        // apos pegar todos os processos, escalona-los
-        while (i < 5)
+        // apos pegar todos os processos, escalonar eles
+        int scheduler_start_time;
+        gettimeofday(&current_time, NULL); // atualizando tempo atual
+        scheduler_start_time = current_time.tv_sec;
+
+        while (1)
         {
-            printf("inicio while\n");
-            if (is_queue_empty(processes_queue))
+
+            if (is_queue_empty(round_robin_processes_queue) && is_queue_empty(real_time_processes_queue))
             {
-                puts("fila vazia\n");
+                puts("filas vazia\n");
                 exit(0);
             }
 
-            // pega primeiro processo da fila
-            queue_node *process = dequeue(processes_queue); // pega o primeiro processo na fila
+            queue_node *round_robin_process = dequeue(round_robin_processes_queue); // pega o primeiro processo na fila
 
-            if (process->start_time == -1 && process->duration_time == -1) // round robin
+            if (round_robin_process->start_time == -1 && round_robin_process->duration_time == -1) // round robin
             {
+                printf("iniciando o programa %s (round robin)\n\n", round_robin_process->program_name);
                 int start_time_rr;
 
                 // pegando tempo de inicio de execucao
                 gettimeofday(&current_time, NULL);
                 start_time_rr = current_time.tv_sec;
 
-                printf("iniciando o programa %s (round robin)\n\n", process->program_name);
-                print_queue(processes_queue);
-                if (process->pid == 0) // primeira vez que esta executando
+                print_queue(round_robin_processes_queue);
+                if (round_robin_process->pid == 0) // primeira vez que esta executando
                 {
                     // criando processo filho para executar o programa
-                    process->pid = fork();
-                    if (process->pid == 0) // filho
+                    round_robin_process->pid = fork();
+                    if (round_robin_process->pid == 0) // filho
                     {
-                        /* na teoria o programa demora muito mais que 1 segundo
-                        entao nao teria problema do filho acabar de executar
-                        antes do pai contabilizar um segundo de execucao */
-                        is_program_executing = 1;
-                        printf("execl %s agora\n\n", process->program_name);
-                        execl(process->program_name, process->program_name, NULL); // programa executando ate receber SIGSTOP
+                        printf("execl %s agora\n\n", round_robin_process->program_name);
+                        execl(round_robin_process->program_name, round_robin_process->program_name, NULL); // programa executando ate receber SIGSTOP
                         pause();
                     }
                     else // pai (scheduler)
@@ -233,11 +266,10 @@ int main(void)
                             if (current_time.tv_sec - start_time_rr == 1) // verificando se passou 1 segundo
                             {
                                 /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                printf("SIGSTOP %s agora\n\n", process->program_name);
-                                kill(process->pid, SIGSTOP); // envia SIGSTOP pro processo em execucao
-                                is_program_executing = 0;
-                                enqueue(processes_queue, process->program_name, process->start_time, process->duration_time, process->pid); // manda pro final da fila de pronto
-                                print_queue(processes_queue);
+                                printf("parando a execucao de %s agora\n\n", round_robin_process->program_name);
+                                kill(round_robin_process->pid, SIGSTOP);                                                                                                                    // envia SIGSTOP pro processo em execucao
+                                enqueue(processes_queue, round_robin_process->program_name, round_robin_process->start_time, round_robin_process->duration_time, round_robin_process->pid); // manda pro final da fila de pronto
+                                print_queue(round_robin_processes_queue);
                                 break;
                             }
                         }
@@ -245,9 +277,8 @@ int main(void)
                 }
                 else // processo que ja foi executado e retornou ao primeiro lugar da fila de prontos
                 {
-                    is_program_executing = 1;
-                    printf("SIGCONT agora\n\n");
-                    kill(process->pid, SIGCONT); // faz o processo retornar a execucao
+                    printf("continuando a execucao de %s agora\n\n", round_robin_process->program_name);
+                    kill(round_robin_process->pid, SIGCONT); // faz o processo retornar a execucao
 
                     while (1)
                     {
@@ -255,10 +286,9 @@ int main(void)
                         if (current_time.tv_sec - start_time_rr == 1) // verificando se passou 1 segundo
                         {
                             /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                            printf("SIGSTOP do processo repetido agora\n\n");
-                            kill(process->pid, SIGSTOP); // envia SIGSTOP para o processo em execucao
-                            is_program_executing = 0;
-                            enqueue(processes_queue, process->program_name, process->start_time, process->duration_time, process->pid); // manda pro final da fila de pronto
+                            printf("parando novamente a execucao do programa %s agora\n\n", round_robin_process->program_name);
+                            kill(round_robin_process->pid, SIGSTOP);                                                                                                                    // envia SIGSTOP para o processo em execucao
+                            enqueue(processes_queue, round_robin_process->program_name, round_robin_process->start_time, round_robin_process->duration_time, round_robin_process->pid); // manda pro final da fila de pronto
                             print_queue(processes_queue);
                             break;
                         }
@@ -266,101 +296,93 @@ int main(void)
                 }
             }
 
-            else // real time
+            if (scheduler_start_time + real_time_processes_queue->head->start_time == current_time.tv_sec) // verifica se atingiu tempo de inicio do processo real time em primeiro na fila
             {
-                printf("entrou real time\n");
                 int start_time_rt;
-                gettimeofday(&current_time, NULL);
                 start_time_rt = current_time.tv_sec;
+                queue_node *real_time_process = dequeue(real_time_processes_queue); // pega o primeiro processo na fila
+
+                printf("iniciando o programa %s (real time)\n", real_time_process->program_name);
 
                 while (1)
                 {
-                    gettimeofday(&current_time, NULL);                              // atualizando a variavel de tempo atual
-                    if (start_time_rt + process->start_time == current_time.tv_sec) // testando se atingiu o tempo de inicio
+                    if (real_time_process->pid == 0) // primeira vez que esta executando
                     {
-                        start_time_rt = current_time.tv_sec; // atualizando tempo de inicio
-
-                        if (process->pid == 0) // primeira vez que esta executando
+                        // criando processo filho para executar o programa
+                        real_time_process->pid = fork();
+                        if (real_time_process->pid == 0) // filho
                         {
-                            // criando processo filho para executar o programa
-                            process->pid = fork();
-                            if (process->pid == 0) // filho
-                            {
-                                /* na teoria o programa demora muito mais que 1 segundo
-                                entao nao teria problema do filho acabar de executar
-                                antes do pai contabilizar um segundo de execucao */
-                                is_program_executing = 1;
-                                printf("execl %s agora\n\n", process->program_name);
-                                execl(process->program_name, process->program_name, NULL); // programa executando ate receber SIGSTOP
-                                pause();
-                            }
-                            else // pai (scheduler)
-                            {
-                                while (1)
-                                {
-                                    gettimeofday(&current_time, NULL);                                 // atualizando tempo atual
-                                    if (start_time_rt + process->duration_time == current_time.tv_sec) // verificando se passou o tempo de duracao do processo
-                                    {
-                                        /* se tiver passado o tempo de duracao, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                        printf("SIGSTOP %s agora\n\n", process->program_name);
-                                        kill(process->pid, SIGSTOP); // envia SIGSTOP pro processo em execucao
-                                        is_program_executing = 0;
-                                        enqueue(processes_queue, process->program_name, process->start_time, process->duration_time, process->pid); // manda pro final da fila de pronto
-                                        print_queue(processes_queue);
-                                        break;
-                                    }
-                                }
-                            }
+                            /* na teoria o programa demora muito mais que 1 segundo
+                            entao nao teria problema do filho acabar de executar
+                            antes do pai contabilizar um segundo de execucao */
+                            printf("execl %s agora\n\n", real_time_process->program_name);
+                            execl(real_time_process->program_name, real_time_process->program_name, NULL); // programa executando ate receber SIGSTOP
+                            pause();
                         }
-
-                        else // processo que ja foi executado e retornou ao primeiro lugar da fila de pronto
+                        else // pai (scheduler)
                         {
-                            is_program_executing = 1;
-                            printf("SIGCONT agora\n\n");
-                            start_time_rt = current_time.tv_sec; // atualizando tempo de inicio
-                            kill(process->pid, SIGCONT);         // faz o processo retornar a execucao
-
                             while (1)
                             {
-                                gettimeofday(&current_time, NULL);                                 // atualizando tempo atual
-                                if (start_time_rt + process->duration_time == current_time.tv_sec) // verificando se passou 1 segundo
+                                gettimeofday(&current_time, NULL);                                           // atualizando tempo atual
+                                if (start_time_rt + real_time_process->duration_time == current_time.tv_sec) // verificando se passou o tempo de duracao do processo
                                 {
-                                    /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                    printf("SIGSTOP do processo repetido agora\n\n");
-                                    kill(process->pid, SIGSTOP); // envia SIGSTOP para o processo em execucao
-                                    is_program_executing = 0;
-                                    enqueue(processes_queue, process->program_name, process->start_time, process->duration_time, process->pid); // manda pro final da fila de pronto
+                                    /* se tiver passado o tempo de duracao, manda SIGSTOP para o processo e coloca ele no final da fila */
+                                    printf("parando o programa %s agora\n\n", real_time_process->program_name);
+                                    kill(real_time_process->pid, SIGSTOP);                                                                                                              // envia SIGSTOP pro processo em execucao
+                                    enqueue(processes_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid); // manda pro final da fila de pronto
                                     print_queue(processes_queue);
                                     break;
                                 }
                             }
                         }
-                        break;
                     }
+
+                    else // processo que ja foi executado e retornou ao primeiro lugar da fila de pronto
+                    {
+                        printf("continuando a execucao do programa %s agora\n\n", real_time_process->program_name);
+                        start_time_rt = current_time.tv_sec;   // atualizando tempo de inicio
+                        kill(real_time_process->pid, SIGCONT); // faz o processo retornar a execucao
+
+                        while (1)
+                        {
+                            gettimeofday(&current_time, NULL);                                           // atualizando tempo atual
+                            if (start_time_rt + real_time_process->duration_time == current_time.tv_sec) // verificando se passou 1 segundo
+                            {
+                                /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
+                                printf("parando novamente o processo %s agora\n\n", real_time_process->program_name);
+                                kill(real_time_process->pid, SIGSTOP);                                                                                                              // envia SIGSTOP para o processo em execucao
+                                enqueue(processes_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid); // manda pro final da fila de pronto
+                                print_queue(processes_queue);
+                                break;
+                            }
+                        }
+                    }
+                    break;
                 }
                 // sleep pelo tempo que resta ate completar 1 minuto ja que os processos sao periodicos (1 por minuto)
                 // sleep(60 - (start_time_rt + process->duration_time));
             }
-            i++;
         }
 
         free_queue(processes_queue);
-
-        if (shmdt(shm_program_name) == -1)
-        {
-            printf("erro no detach");
-            exit(1);
-        }
-        if (shmctl(segment, IPC_RMID, 0) == -1)
-        {
-            printf("erro no shmctl");
-            exit(1);
-        }
+        free_queue(waiting_queue);
+        free_queue(real_time_processes_queue);
+        free_queue(round_robin_processes_queue);
 
         exit(0);
     }
-
     wait(&status); // aguardando processo filho terminar
+
+    if (shmdt(shm_program_name) == -1)
+    {
+        printf("erro no detach");
+        exit(1);
+    }
+    if (shmctl(segment, IPC_RMID, 0) == -1)
+    {
+        printf("erro no shmctl");
+        exit(1);
+    }
 
     return 0;
 }
@@ -438,3 +460,30 @@ void free_queue(queue *q)
     q->head = NULL;
     q->tail = NULL;
 }
+
+int check_conflicting_times(queue *q, int process_start_time, int process_duration_time)
+{
+
+    queue_node *current = q->head;
+
+    int process_end_time = process_start_time + process_duration_time;
+    int current_end_time;
+
+    while (current != NULL)
+    {
+        current_end_time = current->start_time + current->duration_time;
+
+        // iniciando ao mesmo tempo
+        if (process_start_time == current->start_time)
+            return 1;
+
+        // inicia antes e termina depois, entao esta sobrepondo sobre o tempo do outro
+        if (process_start_time < current->start_time && process_end_time > current_end_time)
+            return 1;
+        current = current->next;
+    }
+
+    return 0;
+}
+
+void sigusr1_handler(int signum) { is_io = 1; }
