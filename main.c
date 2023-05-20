@@ -249,20 +249,6 @@ int main(void)
                         free(tmp_round_robin_process);
                     }
                 }
-                else // real time
-                {
-                    if ((waiting_queue->head->io_start_time + waiting_queue->head->duration_time) <= current_time.tv_sec) // verificando se ja passou todo o tempo maximo do processo real time
-                    {
-                        queue_node *tmp_real_time_process;
-                        tmp_real_time_process = (queue_node *)malloc(sizeof(queue_node));
-                        tmp_real_time_process = dequeue(waiting_queue);
-
-                        kill(tmp_real_time_process->pid, SIGSTOP);
-                        enqueue(real_time_processes_queue, tmp_real_time_process->program_name, tmp_real_time_process->start_time, tmp_real_time_process->duration_time, tmp_real_time_process->pid, tmp_real_time_process->io_start_time);
-                        printf("Programa %s (real time) voltou para a fila de pronto (estava na fila de espera de I/O)\n\n", tmp_real_time_process->program_name);
-                        free(tmp_real_time_process);
-                    }
-                }
             }
 
             if (!is_queue_empty(round_robin_processes_queue))
@@ -401,25 +387,6 @@ int main(void)
                             }
                             else // pai (scheduler)
                             {
-                                usleep(1000);   // tempo para variavel  is_io ser atualizada pelo handler caso o processo seja i/o bound
-                                if (is_io == 1) // se for I/O bound coloca na fila de espera
-                                {
-                                    printf("Programa %s eh io bound, mandando pra fila de espera ate operacao I/O acabar\n", real_time_process->program_name);
-
-                                    // marcando tempo de inicio que entrou na fila de espera
-                                    gettimeofday(&current_time, NULL);
-                                    real_time_process->io_start_time = current_time.tv_sec;
-
-                                    // colocando processo na fila de espera
-                                    enqueue(waiting_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid, real_time_process->io_start_time);
-                                    is_io = 0;
-                                    printf("Fila de espera I/O Bound: ");
-                                    print_queue(waiting_queue);
-                                    printf("\n");
-                                }
-
-                                else // se for CPU bound apenas espera acabar tempo de execucao e manda de volta para a fila de pronto
-                                {
                                     while (1)
                                     {
                                         gettimeofday(&current_time, NULL);                                           // atualizando tempo atual
@@ -435,27 +402,11 @@ int main(void)
                                             break;
                                         }
                                     }
-                                }
                             }
                         }
 
                         else // processo que ja foi executado e retornou ao primeiro lugar da fila de pronto
                         {
-                            if (real_time_process->io_start_time != 0) // verifica se eh i/o bound
-                            {
-                                printf("Executando novamente o programa %s (I/O Bound)\n", real_time_process->program_name);
-                                gettimeofday(&current_time, NULL);
-                                real_time_process->io_start_time = current_time.tv_sec;
-
-                                // colocando na fila de espera
-                                enqueue(waiting_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid, real_time_process->io_start_time);
-                                printf("Fila de espera I/O Bound: ");
-                                print_queue(waiting_queue);
-                                printf("\n");
-                            }
-
-                            else
-                            {
                                 printf("Executando novamente o programa %s (CPU Bound)\n", real_time_process->program_name);
                                 start_time_rt = current_time.tv_sec;   // atualizando tempo de inicio
                                 kill(real_time_process->pid, SIGCONT); // faz o processo retornar a execucao
@@ -475,7 +426,6 @@ int main(void)
                                         break;
                                     }
                                 }
-                            }
                         }
                         break;
                     }
