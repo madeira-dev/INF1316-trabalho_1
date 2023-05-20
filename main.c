@@ -220,7 +220,7 @@ int main(void)
         }
 
         // apos pegar todos os processos, escalonar eles
-        int scheduler_start_time, io_time_slice = 5 /* considerando 5 sec de tempo de io para round robin */;
+        int scheduler_start_time, io_time_slice = 3 /* considerando 5 sec de tempo de io para round robin */;
         queue_node *round_robin_process = (queue_node *)malloc(sizeof(queue_node));
         queue_node *real_time_process = (queue_node *)malloc(sizeof(queue_node));
         gettimeofday(&current_time, NULL); // atualizando tempo atual
