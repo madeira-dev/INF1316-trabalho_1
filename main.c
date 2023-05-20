@@ -1,16 +1,7 @@
-/* TODO:
-    1 - interpretador verifica as restrições dos tempos dos processos real time - FEITO
-
-    2 - dividir em filas para cada tipo de processo - FEITO
-
-    3 - verificação contínua do tempo para, caso coincida com tempo de início
-        de um real time, colocar ele direto mesmo que no lugar de um round robin - FEITO
-
-    4 - tratar casos de i/o bound
-        4.1 - passar pid do pai para o processo que será executado pelos argumentos de chamada - FEITO
-        4.2 - verificar se o processo pai recebe o sinal do processo sendo executado - FEITO
-        4.3 - depois que receber o sinal, colocar o processo na fila de espera até acabar o
-              tempo de execução dele (entender melhor como funciona isso do i/o bound)
+/*
+    Membros do grupo:
+        Gabriel Madeira 2111471
+        Juliana Pinheiro 2110516
 */
 
 #include <stdio.h>
@@ -25,7 +16,7 @@
 #define MAX_PROGRAM_NAME_LEN 20
 #define SHM_SIZE 1024
 
-typedef struct _queue // fila de prontos
+typedef struct _queue // fila de processos
 {
     struct _queue_node *head;
     struct _queue_node *tail;
@@ -66,7 +57,7 @@ int main(void)
     int segment, *shm_start_time, *shm_duration_time, *interpreter_end, *shm_access_var;
 
     // variaveis dos processos
-    int scheduler_pid /* child pid */, status;
+    int scheduler_pid, status;
 
     signal(SIGUSR1, sigusr1_handler); // sigusr1 usado para receber sinal de I/O bound
     queue *temp_queue;                // queue temporaria no interpretador para ver se tempos dos processos real time estao conflitando
@@ -74,7 +65,7 @@ int main(void)
     init_queue(temp_queue);
 
     // criando segmento de memoria compartilhada
-    segment = shmget(129000, SHM_SIZE, IPC_CREAT | 0666);
+    segment = shmget(1000, SHM_SIZE, IPC_CREAT | 0666);
     if (segment == -1)
     {
         printf("erro no shmget\n");
@@ -123,7 +114,7 @@ int main(void)
         exit(1);
     }
 
-    if (scheduler_pid != 0) // interpreter (parent)
+    if (scheduler_pid != 0) // interpretador (pai)
     {
         // lendo linhas do arquivo
         while ((c = fgetc(file_ptr)) != EOF)
@@ -171,7 +162,7 @@ int main(void)
         free_queue(temp_queue);
     }
 
-    else // scheduler (child)
+    else // escalonador (filho)
     {
         queue *waiting_queue /* fila para colocar os i/o até chegar o tempo deles */, *real_time_processes_queue /* fila apenas para processos real time */, *round_robin_processes_queue /* fila apenas para processos round robin */;
         int local_start_time, local_duration_time;
@@ -216,9 +207,9 @@ int main(void)
                 break;
         }
 
-        printf("fila round robin:\n");
+        printf("Fila Round-Robin: ");
         print_queue(round_robin_processes_queue);
-        printf("fila real time:\n");
+        printf("Fila Real Time: ");
         print_queue(real_time_processes_queue);
         printf("\n");
 
@@ -229,9 +220,9 @@ int main(void)
         }
 
         // apos pegar todos os processos, escalonar eles
-        int scheduler_start_time, io_time_slice = 5 /* considerando 5 sec de tempo de io */;
-        queue_node *round_robin_process;
-        queue_node *real_time_process;
+        int scheduler_start_time, io_time_slice = 5 /* considerando 5 sec de tempo de io para round robin */;
+        queue_node *round_robin_process = (queue_node *)malloc(sizeof(queue_node));
+        queue_node *real_time_process = (queue_node *)malloc(sizeof(queue_node));
         gettimeofday(&current_time, NULL); // atualizando tempo atual
         scheduler_start_time = current_time.tv_sec;
 
@@ -253,7 +244,7 @@ int main(void)
 
                         kill(tmp_round_robin_process->pid, SIGSTOP);
                         enqueue(round_robin_processes_queue, tmp_round_robin_process->program_name, tmp_round_robin_process->start_time, tmp_round_robin_process->duration_time, tmp_round_robin_process->pid, tmp_round_robin_process->io_start_time);
-                        printf("programa %s (round robin) voltou para a fila de pronto (estava na fila de espera de i/o)\n\n", tmp_round_robin_process->program_name);
+                        printf("Programa %s (Round-Robin) voltou para a fila de pronto (estava na fila de espera de I/O)\n\n", tmp_round_robin_process->program_name);
                         free(tmp_round_robin_process);
                     }
                 }
@@ -267,7 +258,7 @@ int main(void)
 
                         kill(tmp_real_time_process->pid, SIGSTOP);
                         enqueue(real_time_processes_queue, tmp_real_time_process->program_name, tmp_real_time_process->start_time, tmp_real_time_process->duration_time, tmp_real_time_process->pid, tmp_real_time_process->io_start_time);
-                        printf("programa %s (real time) voltou para a fila de pronto (estava na fila de espera de i/o)\n\n", tmp_real_time_process->program_name);
+                        printf("Programa %s (Real Time) voltou para a fila de pronto (estava na fila de espera de I/O)\n\n", tmp_real_time_process->program_name);
                         free(tmp_real_time_process);
                     }
                 }
@@ -278,13 +269,13 @@ int main(void)
                 {
                     int start_time_rr;
                     round_robin_process = dequeue(round_robin_processes_queue); // pega o primeiro processo na fila
-                    printf("iniciando o programa %s (round robin)\n\n", round_robin_process->program_name);
+                    printf("Iniciando o programa %s (round robin)\n\n", round_robin_process->program_name);
 
                     // pegando tempo de inicio de execucao
                     gettimeofday(&current_time, NULL);
                     start_time_rr = current_time.tv_sec;
 
-                    printf("queue round robin:\n");
+                    printf("Fila Round-Robin: \n");
                     print_queue(round_robin_processes_queue);
                     if (round_robin_process->pid == 0) // primeira vez que esta executando
                     {
@@ -296,7 +287,6 @@ int main(void)
                             char tmp_parent_pid[24]; // usado apenas para converter o pid do pai para string pra poder passar como argumento (ja que todos devem ser passados como string)
                             sprintf(tmp_parent_pid, "%d", scheduler_pid);
 
-                            printf("execl %s agora\n\n", round_robin_process->program_name);
                             execl(round_robin_process->program_name /* file name */, round_robin_process->program_name /* arg0 */, tmp_parent_pid /* arg1 */, NULL); // programa executando ate receber SIGSTOP
                             pause();
                         }
@@ -305,7 +295,7 @@ int main(void)
                             usleep(1000);   // tempo para variavel  is_io ser atualizada pelo handler caso o processo seja i/o bound
                             if (is_io == 1) // se for I/O bound coloca na fila de espera
                             {
-                                printf("programa %s eh io bound, mandando pra fila de espera ate operacao i/o acabar\n", round_robin_process->program_name);
+                                printf("Programa %s eh I/O Bound, mandando pra fila de espera ate operacao I/O acabar\n", round_robin_process->program_name);
 
                                 // marcando tempo de inicio que entrou na fila de espera
                                 gettimeofday(&current_time, NULL);
@@ -324,7 +314,7 @@ int main(void)
                                     if (current_time.tv_sec - start_time_rr >= 1) // verificando se passou 1 segundo
                                     {
                                         /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                        printf("parando a execucao de %s agora\n\n", round_robin_process->program_name);
+                                        printf("Parando a execucao de %s agora\n\n", round_robin_process->program_name);
                                         kill(round_robin_process->pid, SIGSTOP);                                                                                                                                                                    // envia SIGSTOP pro processo em execucao
                                         enqueue(round_robin_processes_queue, round_robin_process->program_name, round_robin_process->start_time, round_robin_process->duration_time, round_robin_process->pid, round_robin_process->io_start_time); // manda pro final da fila de pronto
                                         print_queue(round_robin_processes_queue);
@@ -338,7 +328,7 @@ int main(void)
                     {
                         if (round_robin_process->io_start_time != 0) // verificando se eh i/o bound
                         {
-                            printf("executando de novo o programa %s que eh io bound\n", round_robin_process->program_name);
+                            printf("Executando novamente o programa %s (I/O Bound)\n", round_robin_process->program_name);
                             gettimeofday(&current_time, NULL);
                             round_robin_process->io_start_time = current_time.tv_sec;
 
@@ -348,7 +338,7 @@ int main(void)
 
                         else // se nao for io bound continua a execucao padrao
                         {
-                            printf("continuando a execucao de %s agora\n\n", round_robin_process->program_name);
+                            printf("Continuando a execucao de %s (CPU Bound)\n\n", round_robin_process->program_name);
                             kill(round_robin_process->pid, SIGCONT); // faz o processo retornar a execucao
 
                             while (1)
@@ -357,7 +347,7 @@ int main(void)
                                 if (current_time.tv_sec - start_time_rr >= 1) // verificando se passou 1 segundo
                                 {
                                     /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                    printf("parando novamente a execucao do programa %s agora\n\n", round_robin_process->program_name);
+                                    printf("Parando novamente a execucao do programa %s (CPU Bound)\n\n", round_robin_process->program_name);
                                     kill(round_robin_process->pid, SIGSTOP);                                                                                                                                                                    // envia SIGSTOP para o processo em execucao
                                     enqueue(round_robin_processes_queue, round_robin_process->program_name, round_robin_process->start_time, round_robin_process->duration_time, round_robin_process->pid, round_robin_process->io_start_time); // manda pro final da fila de pronto
                                     print_queue(round_robin_processes_queue);
@@ -375,9 +365,9 @@ int main(void)
                     start_time_rt = current_time.tv_sec;
                     real_time_process = dequeue(real_time_processes_queue); // pega o primeiro processo na fila
 
-                    printf("iniciando o programa %s (real time)\n", real_time_process->program_name);
+                    printf("Iniciando o programa %s (Real Time)\n", real_time_process->program_name);
 
-                    printf("queue real time:\n");
+                    printf("Fila Real Time:\n");
                     print_queue(real_time_processes_queue);
                     while (1)
                     {
@@ -391,7 +381,6 @@ int main(void)
                                 char tmp_parent_pid[24]; // usado apenas para converter o pid do pai para string pra poder passar como argumento (ja que todos devem ser passados como string)
                                 sprintf(tmp_parent_pid, "%d", scheduler_pid);
 
-                                printf("execl %s agora\n\n", real_time_process->program_name);
                                 execl(real_time_process->program_name, real_time_process->program_name, tmp_parent_pid, NULL); // programa executando ate receber SIGSTOP
                                 pause();
                             }
@@ -400,7 +389,7 @@ int main(void)
                                 usleep(1000);   // tempo para variavel  is_io ser atualizada pelo handler caso o processo seja i/o bound
                                 if (is_io == 1) // se for I/O bound coloca na fila de espera
                                 {
-                                    printf("programa %s eh io bound, mandando pra fila de espera ate operacao i/o acabar\n", real_time_process->program_name);
+                                    printf("Programa %s eh io bound, mandando pra fila de espera ate operacao I/O acabar\n", real_time_process->program_name);
 
                                     // marcando tempo de inicio que entrou na fila de espera
                                     gettimeofday(&current_time, NULL);
@@ -419,7 +408,7 @@ int main(void)
                                         if (start_time_rt + real_time_process->duration_time <= current_time.tv_sec) // verificando se passou o tempo de duracao do processo
                                         {
                                             /* se tiver passado o tempo de duracao, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                            printf("parando o programa %s agora\n\n", real_time_process->program_name);
+                                            printf("Parando o programa %s (CPU Bound)\n\n", real_time_process->program_name);
                                             kill(real_time_process->pid, SIGSTOP);                                                                                                                                                          // envia SIGSTOP pro processo em execucao
                                             enqueue(real_time_processes_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid, real_time_process->io_start_time); // manda pro final da fila de pronto
                                             print_queue(real_time_processes_queue);
@@ -434,7 +423,7 @@ int main(void)
                         {
                             if (real_time_process->io_start_time != 0) // verifica se eh i/o bound
                             {
-                                printf("executando de novo o programa %s que eh io bound\n", real_time_process->program_name);
+                                printf("Executando de novo o programa %s (I/O Bound)\n", real_time_process->program_name);
                                 gettimeofday(&current_time, NULL);
                                 real_time_process->io_start_time = current_time.tv_sec;
 
@@ -444,7 +433,7 @@ int main(void)
 
                             else
                             {
-                                printf("continuando a execucao do programa %s agora\n\n", real_time_process->program_name);
+                                printf("Continuando a execucao do programa %s (CPU Bound)\n\n", real_time_process->program_name);
                                 start_time_rt = current_time.tv_sec;   // atualizando tempo de inicio
                                 kill(real_time_process->pid, SIGCONT); // faz o processo retornar a execucao
 
@@ -454,7 +443,7 @@ int main(void)
                                     if (start_time_rt + real_time_process->duration_time <= current_time.tv_sec) // verificando se passou 1 segundo
                                     {
                                         /* se tiver passado 1 segundo, manda SIGSTOP para o processo e coloca ele no final da fila */
-                                        printf("parando novamente o processo %s agora\n\n", real_time_process->program_name);
+                                        printf("Parando novamente o processo %s agora\n\n", real_time_process->program_name);
                                         kill(real_time_process->pid, SIGSTOP);                                                                                                                                                          // envia SIGSTOP para o processo em execucao
                                         enqueue(real_time_processes_queue, real_time_process->program_name, real_time_process->start_time, real_time_process->duration_time, real_time_process->pid, real_time_process->io_start_time); // manda pro final da fila de pronto
                                         print_queue(real_time_processes_queue);
@@ -539,7 +528,6 @@ void print_queue(queue *q)
         return;
 
     queue_node *current = q->head;
-    printf("queue: ");
 
     while (current != NULL)
     {
